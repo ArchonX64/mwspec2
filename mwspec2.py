@@ -9,8 +9,6 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import scipy.signal as sig
 
-mpl.use("QtAgg")
-
 MWSPEC_DEBUG = False
 
 space_delim = ["ft"]
@@ -167,6 +165,23 @@ class ExperimentalSpectrum(SpectrumPeaks):
             np.savetxt(filename, data, delimiter=" ")
         elif ext in comma_delim:
             np.savetxt(filename, data, delimiter=",")
+
+    def divide_by(self, other: ExperimentalSpectrum, freq_var: float) -> (np.array, np.array, np.array):
+        iself, iother = self.correlate_peaks(other, freq_var)
+
+        ratios = self.peak_intens()[iself] / other.peak_intens()[iother]
+
+        return ratios, iself, iother
+    
+    def keep_ratios_of(self, other: ExperimentalSpectrum, freq_var: float, lower_ratio: float, upper_ratio: float) -> None:
+        ratios, iself, iother = self.divide_by(other, freq_var)
+
+        iself = iself[(ratios >= lower_ratio) & (ratios <= upper_ratio)]
+
+        iself_mask = np.arange(len(self.peak_freqs()))
+        iself_mask = np.delete(iself_mask, iself)
+
+        self.remove_peaks(iself_mask)
 
 def get_spectrum(filename: str, name: str, peak_min_inten: float, peak_min_prominence: float, peak_wlen: int)\
         -> ExperimentalSpectrum:
