@@ -141,7 +141,7 @@ class ExperimentalSpectrum(SpectrumPeaks):
             inten[lefts[i]:rights[i]] = blank_val
 
     def plot(self):
-        plt.plot(self.freq, self.inten)
+        plt.plot(self.freq, self.inten, label=self.name)
 
         global plot_spectrum
         plot_spectrum = True
@@ -183,14 +183,13 @@ class ExperimentalSpectrum(SpectrumPeaks):
 
         self.remove_peaks(iself_mask)
 
-def get_spectrum(filename: str, name: str, peak_min_inten: float, peak_min_prominence: float, peak_wlen: int)\
-        -> ExperimentalSpectrum:
+def get_spectrum(filename: str, name: str, peak_min_inten: float, peak_min_prominence: float, peak_wlen: int, skiprows=0) -> ExperimentalSpectrum:
     name, ext = _check_filename(filename)
 
     if ext in space_delim:
-        data = np.loadtxt(filename, delimiter=" ")
+        data = np.loadtxt(filename, delimiter=" ", skiprows=skiprows)
     elif ext in comma_delim:
-        data = np.loadtxt(filename, delimiter=",")
+        data = np.loadtxt(filename, delimiter=",", skiprows=skiprows)
 
     freq, inten = data[:, 0], data[:, 1]
 
@@ -207,7 +206,7 @@ def get_spectrum(filename: str, name: str, peak_min_inten: float, peak_min_promi
 
     return spec
 
-def show(inten_units=None):
+def show(inten_units=None) -> None:
     plt.legend()
     if plot_spectrum and plot_RVI:
         raise ValueError("Spectra and ratio plots cannot be plotted together!")
@@ -216,6 +215,16 @@ def show(inten_units=None):
         plt.xlabel("Frequency (MHz)")
         plt.ylabel(f"Intensity ({inten_units})")
         plt.show()
+    elif plot_RVI:
+        plt.xlabel("Intensity in Spectrum")
+        plt.ylabel("Ratio")
+        plt.show()
+
+def plot_RVI(inten_spec: ExperimentalSpectrum, divisor_spec: ExperimentalSpectrum, freq_var: float) -> None:
+    ratios, iself, iother = inten_spec.divide_by(divisor_spec, freq_var)
+
+    plt.scatter(inten_spec.peak_intens()[iself], ratios)
+    plot_RVI = True
 
 def _check_filename(filename: str):
     dotsplit = filename.split(".")
