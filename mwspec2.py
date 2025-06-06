@@ -183,7 +183,8 @@ class ExperimentalSpectrum(SpectrumPeaks):
 
         self.remove_peaks(iself_mask)
 
-def get_spectrum(filename: str, name: str, peak_min_inten: float, peak_min_prominence: float, peak_wlen: int, skiprows=0) -> ExperimentalSpectrum:
+def get_spectrum(filename: str, name: str, peak_min_inten: float, peak_min_prominence: float, peak_wlen: int)\
+        -> ExperimentalSpectrum:
     name, ext = _check_filename(filename)
 
     if ext in space_delim:
@@ -206,7 +207,7 @@ def get_spectrum(filename: str, name: str, peak_min_inten: float, peak_min_promi
 
     return spec
 
-def show(inten_units=None) -> None:
+def show(inten_units=None):
     plt.legend()
     if plot_spectrum and plot_RVI:
         raise ValueError("Spectra and ratio plots cannot be plotted together!")
@@ -226,15 +227,18 @@ def plot_RVI(inten_spec: ExperimentalSpectrum, divisor_spec: ExperimentalSpectru
     plt.scatter(inten_spec.peak_intens()[iself], ratios)
     plot_RVI = True
 
+
 def _check_filename(filename: str):
     dotsplit = filename.split(".")
     if len(dotsplit) != 2:  # Verify that filename contains no extra "."
         raise ValueError(f"The filename {filename} cannot contain more than one \".\"!")
     return dotsplit
 
+
 def activate_debug():
     global MWSPEC_DEBUG
     MWSPEC_DEBUG = True
+
 
 def debug(string: str):
     time_str = formatted_time = datetime.now().strftime('%H:%M:%S') + f":{datetime.now().microsecond // 1000:03d}"
