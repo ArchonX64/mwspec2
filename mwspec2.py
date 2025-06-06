@@ -183,6 +183,45 @@ class ExperimentalSpectrum(SpectrumPeaks):
 
         self.remove_peaks(iself_mask)
 
+    def find_CDPS(self, freq_var: float, max_double_step: float, max_cdp_step, max_inten_var: float) -> np.array:
+        return ExperimentalSpectrum._find_CDPS(self.peak_freqs(), self.peak_intens(), freq_var, max_double_step, max_cdp_step, max_inten_var)
+
+    @staticmethod
+    @njit(cache=True)
+    def _find_CDPS(freq: np.array, inten: np.array, freq_var: float,
+                   max_double_step: float,max_cdp_step: float, max_inten_var: float) -> np.array:
+        n = len(freq)
+
+        # Find Differences
+        doublets = np.full((n, n), -1.0)
+        for i in range(n):
+            for j in range(i + 1, n):
+                diff = freq[j] - freq[i]
+                if diff < max_double_step: doublets[i][j] = diff
+
+        # Find CDPs
+        cdps = []
+        for left1 in range(n - 3):
+            for left2 in range(left1 + 1, n - 2):
+                for right1 in range(left2 + 1, n - 1):
+                    for right2 in range(right1 + 1, n):
+                        # Ignore values that were eliminated by not being in range
+                        if doublets[left1][left2] < 0.0 or doublets[right1][right2] < 0:
+                            break
+
+                        # Check for CDP
+                        if abs(doublets[left1][left2] - doublets[right1][right2]) < freq_var:
+                            # Check for intensity ratio
+                            if abs(inten[left1] / inten[right2] - 1) < max_inten_var and abs(inten[left2] / inten[right1] - 1) < max_inten_var:
+                                cdps.append(left1)
+                                cdps.append(left2)
+                                cdps.append(right1)
+                                cdps.append(right2)
+                    if freq[right1] - freq[left2] > max_cdp_step:
+                        break
+        return cdps
+
+
 def get_spectrum(filename: str, name: str, peak_min_inten: float, peak_min_prominence: float, peak_wlen: int)\
         -> ExperimentalSpectrum:
     name, ext = _check_filename(filename)
@@ -207,6 +246,7 @@ def get_spectrum(filename: str, name: str, peak_min_inten: float, peak_min_promi
 
     return spec
 
+
 def show(inten_units=None):
     plt.legend()
     if plot_spectrum and plot_RVI:
@@ -217,15 +257,18 @@ def show(inten_units=None):
         plt.ylabel(f"Intensity ({inten_units})")
         plt.show()
 
+
 def _check_filename(filename: str):
     dotsplit = filename.split(".")
     if len(dotsplit) != 2:  # Verify that filename contains no extra "."
         raise ValueError(f"The filename {filename} cannot contain more than one \".\"!")
     return dotsplit
 
+
 def activate_debug():
     global MWSPEC_DEBUG
     MWSPEC_DEBUG = True
+
 
 def debug(string: str):
     time_str = formatted_time = datetime.now().strftime('%H:%M:%S') + f":{datetime.now().microsecond // 1000:03d}"
