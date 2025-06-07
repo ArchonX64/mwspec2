@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from datetime import datetime
+from typing import Union
 
 import numpy as np
 from numba import njit
@@ -14,8 +15,8 @@ MWSPEC_DEBUG = False
 space_delim = ["ft"]
 comma_delim = ["csv"]
 
-plot_spectrum = False
-plot_RVI = False
+plot_spectrum_flag = False
+plot_RVI_flag = False
 
 fig = plt.figure()
 ax = fig.add_subplot()
@@ -93,10 +94,18 @@ class SpectrumPeaks:
 
         return self_result, other_result
 
-    def remove_peaks_from(self, other: SpectrumPeaks, freq_var: float) -> (np.array, np.array):
-        iself, iother = self.correlate_peaks(other, freq_var)
-        self.remove_peaks(iself)
-        return iself, iother
+    def remove_peaks_from(self, other: Union[SpectrumPeaks, set[SpectrumPeaks]], freq_var: float) -> Union[(np.array, np.array), dict[SpectrumPeaks, (np.array, np.array)]]:
+        if isinstance(other, set):
+            output = {}
+            for spectrum in other:
+                iself, iother = self.correlate_peaks(spectrum, freq_var)
+                self.remove_peaks(iself)
+                output[spectrum] = iself, iother
+            return output
+        else:
+            iself, iother = self.correlate_peaks(other, freq_var)
+            self.remove_peaks(iself)
+            return iself, iother
 
     def plot_peaks(self, scatter=False, name=None):
         name = self.name if name is None else name
@@ -108,8 +117,8 @@ class SpectrumPeaks:
             plt.scatter(self.peak_freqs(), self.peak_intens(), label=name,
                      c="C" + str(self.color_index))
 
-        global plot_spectrum
-        plot_spectrum = True
+        global plot_spectrum_flag
+        plot_spectrum_flag = True
 
 class ExperimentalSpectrum(SpectrumPeaks):
     blank_value = 0
@@ -131,8 +140,8 @@ class ExperimentalSpectrum(SpectrumPeaks):
         ExperimentalSpectrum._remove_spec_peaks(inds, self.inten, self.ipeak_left, self.ipeak_right,
                                                 ExperimentalSpectrum.blank_value)
         self.ipeaks = np.delete(self.ipeaks, inds)
-        self.ipeak_lefts = np.delete(self.ipeak_left, inds)
-        self.ipeak_rights = np.delete(self.ipeak_right, inds)
+        self.ipeak_left = np.delete(self.ipeak_left, inds)
+        self.ipeak_right = np.delete(self.ipeak_right, inds)
 
     @staticmethod
     @njit(cache=True)
@@ -143,8 +152,8 @@ class ExperimentalSpectrum(SpectrumPeaks):
     def plot(self):
         plt.plot(self.freq, self.inten, label=self.name)
 
-        global plot_spectrum
-        plot_spectrum = True
+        global plot_spectrum_flag
+        plot_spectrum_flag = True
 
     def plot_peaks(self, scatter=False, name=None, sides=False):
         super().plot_peaks(scatter, name)
@@ -166,25 +175,52 @@ class ExperimentalSpectrum(SpectrumPeaks):
         elif ext in comma_delim:
             np.savetxt(filename, data, delimiter=",")
 
-    def divide_by(self, other: ExperimentalSpectrum, freq_var: float) -> (np.array, np.array, np.array):
+    def divide_by(self, other: ExperimentalSpectrum, freq_var: float, export_filename: str = None) -> (np.array, np.array, np.array):
         iself, iother = self.correlate_peaks(other, freq_var)
 
         ratios = self.peak_intens()[iself] / other.peak_intens()[iother]
 
+        if export_filename:
+            stacked = np.column_stack([self.peak_freqs()[iself], other.peak_freqs()[iother], ratios])
+            np.savetxt(export_filename, stacked, header=f"{self.name},{other.name},Ratios", delimiter=",")
+
         return ratios, iself, iother
     
-    def keep_ratios_of(self, other: ExperimentalSpectrum, freq_var: float, lower_ratio: float, upper_ratio: float) -> None:
+    def keep_ratios_of(self, other: ExperimentalSpectrum, freq_var: float, lower_ratio: float, upper_ratio: float, apply_to_other: bool = False) -> None:
         ratios, iself, iother = self.divide_by(other, freq_var)
 
-        iself = iself[(ratios >= lower_ratio) & (ratios <= upper_ratio)]
+        ratio_mask = (ratios >= lower_ratio) & (ratios <= upper_ratio)
+
+        iself = iself[ratio_mask]
 
         iself_mask = np.arange(len(self.peak_freqs()))
         iself_mask = np.delete(iself_mask, iself)
 
         self.remove_peaks(iself_mask)
 
-    def find_CDPS(self, freq_var: float, max_double_step: float, max_cdp_step, max_inten_var: float) -> np.array:
-        return ExperimentalSpectrum._find_CDPS(self.peak_freqs(), self.peak_intens(), freq_var, max_double_step, max_cdp_step, max_inten_var)
+        if apply_to_other:
+            iother = iother[ratio_mask]
+            iother_mask = np.arange(len(other.peak_freqs()))
+            iother_mask = np.delete(iother_mask, iother)
+
+            other.remove_peaks(iother_mask)
+
+    def obtain_ratios_of(self, other: ExperimentalSpectrum, to_find: SpectrumPeaks, freq_var) -> (np.array, np.array):
+        ratios, iself_ratio, iother_ratio = self.divide_by(other, freq_var)
+        iself_corr, ifind_corr = self.correlate_peaks(to_find, freq_var)
+
+        # The returned peaks must be both correlated and have a counterpart in the other spectrum
+        values, iself_ratio_inds, iself_corr_inds = np.intersect1d(iself_ratio, iself_corr, return_indices=True)
+
+        return to_find.peak_freqs()[iself_corr_inds], ratios[iself_ratio_inds]
+
+    def find_CDPS(self, freq_var: float, max_double_step: float, max_cdp_step, max_inten_var: float) -> None:
+        cdps = ExperimentalSpectrum._find_CDPS(self.peak_freqs(), self.peak_intens(), freq_var, max_double_step, max_cdp_step, max_inten_var)
+
+        mask = np.arange(len(self.peak_freqs()))
+        mask = np.delete(mask, cdps)
+
+        self.remove_peaks(mask)
 
     @staticmethod
     @njit(cache=True)
@@ -220,6 +256,36 @@ class ExperimentalSpectrum(SpectrumPeaks):
                     if freq[right1] - freq[left2] > max_cdp_step:
                         break
         return cdps
+    
+    def find_intensity_of(self, other: SpectrumPeaks, freq_var: float) -> (np.array, np.array):
+        iself, iother = self.correlate_peaks(other, freq_var)
+        return iself, self.peak_intens[iself]
+    
+class GeneratedSpectrum(SpectrumPeaks):
+    freq: np.array
+    inten: np.array
+
+    def peak_freqs(self):
+        return self.freq
+    
+    def peak_intens(self):
+        return self.inten
+    
+    def remove_peaks(self, inds):
+        self.freq = np.delete(self.freq, inds)
+        self.inten = np.delete(self.inten, inds)
+
+class FrequencyList(SpectrumPeaks):
+    freq: np.array
+
+    def peak_freqs(self):
+        return self.freq
+    
+    def peak_intens(self):  # TODO: Find alternative to making this SpectrumPeaks
+        raise ValueError(f"Object with name \"{self.name}\" is a FrequencyList and doesn't contain peak intensities")
+    
+    def remove_peaks(self, inds):
+        self.freq = np.delete(self.freq, inds)
 
 def get_spectrum(filename: str, name: str, peak_min_inten: float, peak_min_prominence: float, peak_wlen: int, skiprows=0) -> ExperimentalSpectrum:
     name, ext = _check_filename(filename)
@@ -228,6 +294,8 @@ def get_spectrum(filename: str, name: str, peak_min_inten: float, peak_min_promi
         data = np.loadtxt(filename, delimiter=" ", skiprows=skiprows)
     elif ext in comma_delim:
         data = np.loadtxt(filename, delimiter=",", skiprows=skiprows)
+    else:
+        raise ValueError(f"The spectrum file \"{filename}\" has an unsupported extension")
 
     freq, inten = data[:, 0], data[:, 1]
 
@@ -244,16 +312,47 @@ def get_spectrum(filename: str, name: str, peak_min_inten: float, peak_min_promi
 
     return spec
 
+def get_lin(filename: str, name: str = None ):
+    split_name, ext = _check_filename(filename)
+
+    name = split_name if name is None else name
+
+    if ext != "lin":
+        raise ValueError(f"File \"{filename}\" does not have a .lin extension")
+    
+    data = np.loadtxt(filename)
+    
+    spec = GeneratedSpectrum()
+    spec.name = name
+    spec.freq = data[:, 12]
+    spec.inten = np.zeros(len(spec.freq))  # TODO: Figure out a better way to deal with intensity
+
+    return spec
+
+def get_line_list(filename: str, name: str = None) -> FrequencyList:
+    split_name, ext = _check_filename(filename)
+
+    name = name if name is not None else split_name
+    
+    data = np.loadtxt(filename)
+
+    spec = FrequencyList()
+    spec.name = name
+    spec.freq = data
+
+    return spec
+
+
 def show(inten_units=None) -> None:
-    plt.legend()
-    if plot_spectrum and plot_RVI:
+    plt.legend(loc="upper left")
+    if plot_spectrum_flag and plot_RVI_flag:
         raise ValueError("Spectra and ratio plots cannot be plotted together!")
-    elif plot_spectrum:
+    elif plot_spectrum_flag:
         inten_units = "a.u." if inten_units is None else inten_units
         plt.xlabel("Frequency (MHz)")
         plt.ylabel(f"Intensity ({inten_units})")
         plt.show()
-    elif plot_RVI:
+    elif plot_RVI_flag:
         plt.xlabel("Intensity in Spectrum")
         plt.ylabel("Ratio")
         plt.show()
@@ -262,7 +361,23 @@ def plot_RVI(inten_spec: ExperimentalSpectrum, divisor_spec: ExperimentalSpectru
     ratios, iself, iother = inten_spec.divide_by(divisor_spec, freq_var)
 
     plt.scatter(inten_spec.peak_intens()[iself], ratios)
-    plot_RVI = True
+
+    global plot_RVI_flag
+    plot_RVI_flag = True
+
+def plot_ratio_boxes(base_spec: ExperimentalSpectrum, divisor_spec: ExperimentalSpectrum, to_find: list[SpectrumPeaks], freq_var: float) -> None:
+    ratio_list = []
+    labels = []
+
+    for find_spec in to_find:
+        freqs, ratios = base_spec.obtain_ratios_of(other=divisor_spec, to_find=find_spec, freq_var=freq_var)
+        ratio_list.append(ratios)
+        labels.append(find_spec.name)
+
+    plt.boxplot(x=ratio_list, labels=labels)
+    
+    global plot_RVI_flag
+    plot_RVI_flag = True
 
 def _check_filename(filename: str):
     dotsplit = filename.split(".")
