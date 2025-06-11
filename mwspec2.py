@@ -10,6 +10,8 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import scipy.signal as sig
 
+from matplotlib.backend_bases import MouseEvent, KeyEvent
+
 MWSPEC_DEBUG = False
 
 space_delim = ["ft"]
@@ -20,6 +22,10 @@ plot_RVI_flag = False
 
 fig = plt.figure()
 ax = fig.add_subplot()
+
+clicked_points = []
+
+cdp_click_thresh = 0.005
 
 class SpectrumPeaks:
     peak_color_index = 1  # Used to ensure each peak plot is a different color
@@ -43,6 +49,7 @@ class SpectrumPeaks:
     def remove_peaks(self, inds: np.array) -> None:
         pass
 
+    # EXPENSIVE
     def correlate_peaks(self, other: SpectrumPeaks, freq_var: float) -> (np.array, np.array):
         debug(f"Correlating {self.name} with {other.name}, which have {len(self.peak_freqs())} and {len(other.peak_freqs())} peaks respectively")
         iself, iother = SpectrumPeaks._correlate_peaks(self.peak_freqs(), other.peak_freqs(), freq_var)
@@ -175,6 +182,7 @@ class ExperimentalSpectrum(SpectrumPeaks):
         elif ext in comma_delim:
             np.savetxt(filename, data, delimiter=",")
 
+    # Returns: ratios, iself, iother
     def divide_by(self, other: ExperimentalSpectrum, freq_var: float, export_filename: str = None) -> (np.array, np.array, np.array):
         iself, iother = self.correlate_peaks(other, freq_var)
 
@@ -205,15 +213,17 @@ class ExperimentalSpectrum(SpectrumPeaks):
 
             other.remove_peaks(iother_mask)
 
+        # Returns: iself, iother, ifind, ratios
     def obtain_ratios_of(self, other: ExperimentalSpectrum, to_find: SpectrumPeaks, freq_var) -> (np.array, np.array):
         ratios, iself_ratio, iother_ratio = self.divide_by(other, freq_var)
         iself_corr, ifind_corr = self.correlate_peaks(to_find, freq_var)
 
         # The returned peaks must be both correlated and have a counterpart in the other spectrum
-        values, iself_ratio_inds, iself_corr_inds = np.intersect1d(iself_ratio, iself_corr, return_indices=True)
+        _, iself_ratio_inds, iself_corr_inds = np.intersect1d(iself_ratio, iself_corr, return_indices=True)
 
-        return to_find.peak_freqs()[iself_corr_inds], ratios[iself_ratio_inds]
+        return iself_ratio[iself_ratio_inds], iother_ratio[iself_ratio_inds], ifind_corr[iself_corr_inds], ratios[iself_ratio_inds]
 
+    # EXPENSIVE
     def find_CDPS(self, freq_var: float, max_double_step: float, max_cdp_step, max_inten_var: float) -> None:
         cdps = ExperimentalSpectrum._find_CDPS(self.peak_freqs(), self.peak_intens(), freq_var, max_double_step, max_cdp_step, max_inten_var)
 
@@ -260,10 +270,27 @@ class ExperimentalSpectrum(SpectrumPeaks):
     def find_intensity_of(self, other: SpectrumPeaks, freq_var: float) -> (np.array, np.array):
         iself, iother = self.correlate_peaks(other, freq_var)
         return iself, self.peak_intens[iself]
+
+    def cut_and_replace_plot(self, others: set[SpectrumPeaks], freq_var: float) -> None:
+        color_counter = 1
+        for other in others:
+            iself, iother = self.correlate_peaks(other, freq_var)
+
+            plt.stem(self.peak_freqs()[iself], self.peak_intens()[iself], label=other.name, markerfmt=" ", linefmt="C" + str(color_counter))
+            color_counter += 1
+
+        self.remove_peaks_from(others, freq_var)
+        self.plot()
     
 class GeneratedSpectrum(SpectrumPeaks):
     freq: np.array
     inten: np.array
+    uJ: np.array
+    uKa: np.array
+    uKc: np.array
+    lJ: np.array
+    lKa: np.array
+    lKc: np.array
 
     def peak_freqs(self):
         return self.freq
@@ -302,7 +329,7 @@ def get_spectrum(filename: str, name: str, peak_min_inten: float, peak_min_promi
     peaks, properties = sig.find_peaks(inten, height=peak_min_inten, prominence=peak_min_prominence, wlen=peak_wlen)
 
     spec = ExperimentalSpectrum()
-    spec.name = name
+    spec.name = name.split("/")[-1]
     spec.freq = freq
     spec.inten = inten
     spec.ipeaks = peaks
@@ -323,9 +350,32 @@ def get_lin(filename: str, name: str = None ):
     data = np.loadtxt(filename)
     
     spec = GeneratedSpectrum()
-    spec.name = name
+    spec.name = name.split("/")[-1]
     spec.freq = data[:, 12]
     spec.inten = np.zeros(len(spec.freq))  # TODO: Figure out a better way to deal with intensity
+    spec.uJ = data[:, 0].astype("int")
+    spec.uKa = data[:, 1].astype("int")
+    spec.uKc = data[:, 2].astype("int")
+    spec.lJ = data[:, 3].astype("int")
+    spec.lKa = data[:, 4].astype("int")
+    spec.lKc = data[:, 5].astype("int")
+
+    return spec
+
+def get_cat(filename: str, name: str = None):
+    split_name, ext = _check_filename(filename)
+
+    name = split_name if name is None else name
+
+    if ext != "cat":
+        raise ValueError(f"File \"{filename}\" does not have a .lin extension")
+    
+    data = np.loadtxt(filename, usecols=[0, 1, 2])
+
+    spec = GeneratedSpectrum()
+    spec.name = name.split("/")[-1]
+    spec.freq = data[:, 0]
+    spec.inten = np.pow(10, data[:, 2])
 
     return spec
 
@@ -337,7 +387,7 @@ def get_line_list(filename: str, name: str = None) -> FrequencyList:
     data = np.loadtxt(filename)
 
     spec = FrequencyList()
-    spec.name = name
+    spec.name = name.split("/")[-1]
     spec.freq = data
 
     return spec
@@ -365,12 +415,28 @@ def plot_RVI(inten_spec: ExperimentalSpectrum, divisor_spec: ExperimentalSpectru
     global plot_RVI_flag
     plot_RVI_flag = True
 
+def construct_RVI(inten_spec: ExperimentalSpectrum, divisor_spec: ExperimentalSpectrum, others: set[SpectrumPeaks], freq_var: float) -> None:
+    for other in others:
+        iinten, idiv, iother, ratios = inten_spec.obtain_ratios_of(divisor_spec, other, freq_var)
+
+        plt.scatter(inten_spec.peak_intens()[iinten], ratios, label=other.name)
+
+    inten_spec.remove_peaks_from(others, freq_var)
+
+    ratios, iself, iother = inten_spec.divide_by(divisor_spec, freq_var)
+
+    plt.scatter(inten_spec.peak_intens()[iself], ratios, c='black')
+
+    global plot_RVI_flag
+    plot_RVI_flag = True
+    
+
 def plot_ratio_boxes(base_spec: ExperimentalSpectrum, divisor_spec: ExperimentalSpectrum, to_find: list[SpectrumPeaks], freq_var: float) -> None:
     ratio_list = []
     labels = []
 
     for find_spec in to_find:
-        freqs, ratios = base_spec.obtain_ratios_of(other=divisor_spec, to_find=find_spec, freq_var=freq_var)
+        iself, iother, ifind, ratios = base_spec.obtain_ratios_of(other=divisor_spec, to_find=find_spec, freq_var=freq_var)
         ratio_list.append(ratios)
         labels.append(find_spec.name)
 
@@ -392,3 +458,22 @@ def activate_debug():
 def debug(string: str):
     time_str = formatted_time = datetime.now().strftime('%H:%M:%S') + f":{datetime.now().microsecond // 1000:03d}"
     if MWSPEC_DEBUG: print(f"[{time_str}] {string}")
+
+def on_click(event: KeyEvent):
+    if event.inaxes is not None and event.key == " ":
+        print(f"Clicked at {event.xdata}, {event.ydata}")
+
+        global clicked_points
+        clicked_points.append(event.xdata)
+
+        if len(clicked_points) == 4:
+            first_diff = clicked_points[1] - clicked_points[0]
+            second_diff =clicked_points[2] - clicked_points[3]
+            result = abs(first_diff - second_diff)
+            if result < cdp_click_thresh:
+                print(f"Differences are {first_diff} and {second_diff}, is a confirmed CDP")
+            else:
+                print(f"Differences are {first_diff} and {second_diff}, not a CDP")
+            clicked_points.clear()
+
+cid = fig.canvas.mpl_connect('key_press_event', on_click)
