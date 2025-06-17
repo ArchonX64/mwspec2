@@ -19,6 +19,7 @@ comma_delim = ["csv"]
 
 plot_spectrum_flag = False
 plot_RVI_flag = False
+plot_ratio_track = False
 
 fig = plt.figure()
 ax = fig.add_subplot()
@@ -130,6 +131,10 @@ class SpectrumPeaks:
 class ExperimentalSpectrum(SpectrumPeaks):
     blank_value = 0
 
+    peak_min_inten = None
+    peak_min_prominence = None
+    peak_wlen = None
+
     freq: np.array
     inten: np.array
 
@@ -156,8 +161,9 @@ class ExperimentalSpectrum(SpectrumPeaks):
         for i in inds:
             inten[lefts[i]:rights[i]] = blank_val
 
-    def plot(self):
-        plt.plot(self.freq, self.inten, label=self.name)
+    def plot(self, label=None):
+        label = self.name if label is None else label
+        plt.plot(self.freq, self.inten, label=label)
 
         global plot_spectrum_flag
         plot_spectrum_flag = True
@@ -314,8 +320,10 @@ class FrequencyList(SpectrumPeaks):
     def remove_peaks(self, inds):
         self.freq = np.delete(self.freq, inds)
 
-def get_spectrum(filename: str, name: str, peak_min_inten: float, peak_min_prominence: float, peak_wlen: int, skiprows=0) -> ExperimentalSpectrum:
-    name, ext = _check_filename(filename)
+def get_spectrum(filename: str, name: str, peak_min_inten: float = None, peak_min_prominence: float = None, peak_wlen: int = None, skiprows=0) -> ExperimentalSpectrum:
+    split_name, ext = _check_filename(filename)
+
+    name = name if name is not None else split_name
 
     if ext in space_delim:
         data = np.loadtxt(filename, delimiter=" ", skiprows=skiprows)
@@ -325,6 +333,10 @@ def get_spectrum(filename: str, name: str, peak_min_inten: float, peak_min_promi
         raise ValueError(f"The spectrum file \"{filename}\" has an unsupported extension")
 
     freq, inten = data[:, 0], data[:, 1]
+
+    peak_min_inten = peak_min_inten if peak_min_inten is not None else ExperimentalSpectrum.peak_min_inten
+    peak_min_prominence = peak_min_prominence if peak_min_prominence is not None else ExperimentalSpectrum.peak_min_prominence
+    peak_wlen = peak_wlen if peak_wlen is not None else ExperimentalSpectrum.peak_wlen
 
     peaks, properties = sig.find_peaks(inten, height=peak_min_inten, prominence=peak_min_prominence, wlen=peak_wlen)
 
@@ -370,12 +382,18 @@ def get_cat(filename: str, name: str = None):
     if ext != "cat":
         raise ValueError(f"File \"{filename}\" does not have a .lin extension")
     
-    data = np.loadtxt(filename, usecols=[0, 1, 2])
+    data = np.genfromtxt(filename, delimiter=[13, 8, 8, 2, 10, 3, 7, 4, 2, 2, 2, 8, 2, 2])
 
     spec = GeneratedSpectrum()
     spec.name = name.split("/")[-1]
     spec.freq = data[:, 0]
     spec.inten = np.pow(10, data[:, 2])
+    spec.uJ = data[:, 8].astype("int")
+    spec.uKa = data[:, 9].astype("int")
+    spec.uKc = data[:, 10].astype("int")
+    spec.lJ = data[:, 11].astype("int")
+    spec.lKa = data[:, 12].astype("int")
+    spec.lKc = data[:, 13].astype("int")
 
     return spec
 
@@ -402,9 +420,9 @@ def show(inten_units=None) -> None:
         plt.xlabel("Frequency (MHz)")
         plt.ylabel(f"Intensity ({inten_units})")
         plt.show()
-    elif plot_RVI_flag:
-        plt.xlabel("Intensity in Spectrum")
-        plt.ylabel("Ratio")
+    elif plot_ratio_track:
+        plt.xlabel("Concentration Ratio")
+        plt.ylabel("Intensity Ratio")
         plt.show()
 
 def plot_RVI(inten_spec: ExperimentalSpectrum, divisor_spec: ExperimentalSpectrum, freq_var: float) -> None:
@@ -415,20 +433,23 @@ def plot_RVI(inten_spec: ExperimentalSpectrum, divisor_spec: ExperimentalSpectru
     global plot_RVI_flag
     plot_RVI_flag = True
 
-def construct_RVI(inten_spec: ExperimentalSpectrum, divisor_spec: ExperimentalSpectrum, others: set[SpectrumPeaks], freq_var: float) -> None:
-    for other in others:
-        iinten, idiv, iother, ratios = inten_spec.obtain_ratios_of(divisor_spec, other, freq_var)
+def construct_RVI(inten_spec: ExperimentalSpectrum, divisor_spec: ExperimentalSpectrum, freq_var: float, others: set[SpectrumPeaks] = None) -> None:
+    if others is not None:
+        for other in others:
+            iinten, idiv, iother, ratios = inten_spec.obtain_ratios_of(divisor_spec, other, freq_var)
 
-        plt.scatter(inten_spec.peak_intens()[iinten], ratios, label=other.name)
+            plt.scatter(inten_spec.peak_intens()[iinten], ratios, label=other.name)
 
-    inten_spec.remove_peaks_from(others, freq_var)
+        inten_spec.remove_peaks_from(others, freq_var)
 
     ratios, iself, iother = inten_spec.divide_by(divisor_spec, freq_var)
 
     plt.scatter(inten_spec.peak_intens()[iself], ratios, c='black')
 
-    global plot_RVI_flag
-    plot_RVI_flag = True
+    plt.title(f"{inten_spec.name} / {divisor_spec.name}")
+    plt.xlabel(f"Intensity in {inten_spec.name}")
+    plt.ylabel(f"Ratio of {inten_spec.name} / {divisor_spec.name}")
+    plt.show()
     
 
 def plot_ratio_boxes(base_spec: ExperimentalSpectrum, divisor_spec: ExperimentalSpectrum, to_find: list[SpectrumPeaks], freq_var: float) -> None:
@@ -444,6 +465,12 @@ def plot_ratio_boxes(base_spec: ExperimentalSpectrum, divisor_spec: Experimental
     
     global plot_RVI_flag
     plot_RVI_flag = True
+
+def plot_ratio_track(base: ExperimentalSpectrum, divisors: list[ExperimentalSpectrum], species: SpectrumPeaks, freq_var: float) -> None:
+    for divisor in divisors:
+        iself, iother, ifind, ratios = base.obtain_ratios_of(divisor, species, freq_var)
+
+        plt.scatter(np.full(len(ratios), fill_value))
 
 def _check_filename(filename: str):
     dotsplit = filename.split(".")
