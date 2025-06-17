@@ -49,7 +49,7 @@ spectrum2.plot(label="A custom label")
 spectrum1.plot_peaks(scatter=True, sides=False)  # The generated peaks of an experimental spectrum can be plotted too.
                                                  # 'Sides' will show the computed edges of each peak which will be used in cutting.
 
-show()  # This command will halt execution and display everything that includes 'plot up until this point
+show()  # This command will halt execution and display everything that includes 'plot' up until this point
 
 # -----------------------------------------------------------------------------------------------------------------------------------------------
 # CUTTING TRANSITIONS FROM AN EXPERIMENTAL SPECTRUM
