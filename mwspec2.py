@@ -220,8 +220,8 @@ class ExperimentalSpectrum(SpectrumPeaks):
             other.remove_peaks(iother_mask)
 
         # Returns: iself, iother, ifind, ratios
-    def obtain_ratios_of(self, other: ExperimentalSpectrum, to_find: SpectrumPeaks, freq_var) -> (np.array, np.array):
-        ratios, iself_ratio, iother_ratio = self.divide_by(other, freq_var)
+    def obtain_ratios_of(self, denominator: ExperimentalSpectrum, to_find: SpectrumPeaks, freq_var) -> (np.array, np.array):
+        ratios, iself_ratio, iother_ratio = self.divide_by(denominator, freq_var)
         iself_corr, ifind_corr = self.correlate_peaks(to_find, freq_var)
 
         # The returned peaks must be both correlated and have a counterpart in the other spectrum
